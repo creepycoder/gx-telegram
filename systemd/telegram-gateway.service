@@ -1,0 +1,29 @@
+[Unit]
+Description=GX Telegram Gateway (inferont ↔ Hermes agents)
+Documentation=file:///home/ale/projects/gx-telegram/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Non-root user (the GX10 owner). Override with a dedicated user if preferred.
+User=ale
+Group=ale
+WorkingDirectory=/home/ale/projects/gx-telegram
+EnvironmentFile=-/home/ale/projects/gx-telegram/.env
+ExecStart=/home/ale/projects/gx-telegram/.venv/bin/telegram-gateway run
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=telegram-gateway
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/home/ale/projects/gx-telegram/data
+# Hermes needs full user access for tools; tighten later if your toolsets allow.
+
+[Install]
+WantedBy=multi-user.target

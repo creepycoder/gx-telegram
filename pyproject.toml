@@ -1,0 +1,31 @@
+[project]
+name = "telegram-gateway"
+version = "0.1.0"
+description = "Bidirectional Telegram gateway for Hermes Agent installations (GX10 central gateway)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "aiohttp>=3.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-aiohttp>=1.0",
+]
+
+[project.scripts]
+telegram-gateway = "telegram_gateway.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
