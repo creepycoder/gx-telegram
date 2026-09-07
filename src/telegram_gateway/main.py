@@ -58,7 +58,7 @@ async def run(config: Config) -> None:
     stop_task.cancel()
     await gateway.stop()
     await api.stop()
-    await telegram.stop()
+    await telegram.close()
     db.close()
     if poll_failed:
         # surface startup/poll failures (bad token, network, …) to the caller

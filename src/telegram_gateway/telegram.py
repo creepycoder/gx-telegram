@@ -38,13 +38,17 @@ class TelegramClient:
         assert self._session is not None, "TelegramClient not started"
         return self._session
 
-    async def _api(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _api(self, method: str, payload: dict[str, Any],
+                   timeout: aiohttp.ClientTimeout | None = None) -> dict[str, Any]:
         """Call the Bot API with exponential backoff; respect 429 retry_after."""
         url = f"{self.config.telegram_api_base}/bot{self.config.bot_token}/{method}"
         last_error: Exception | None = None
         for attempt in range(MAX_RETRIES):
             try:
-                async with self.session.post(url, json=payload) as resp:
+                post_kwargs: dict[str, Any] = {"json": payload}
+                if timeout is not None:
+                    post_kwargs["timeout"] = timeout
+                async with self.session.post(url, **post_kwargs) as resp:
                     data = await resp.json(content_type=None)
                     if resp.status == 429:
                         params = data.get("parameters") or {}
@@ -97,7 +101,11 @@ class TelegramClient:
         }
         if offset:
             payload["offset"] = offset
-        return await self._api("getUpdates", payload)
+        # Long polling holds the connection open server-side for `timeout`
+        # seconds; the per-request client timeout must exceed it or every
+        # poll is killed locally as asyncio.TimeoutError.
+        poll_timeout = aiohttp.ClientTimeout(total=timeout + 15)
+        return await self._api("getUpdates", payload, timeout=poll_timeout)
 
     async def get_me(self) -> dict[str, Any]:
         return await self._api("getMe", {})

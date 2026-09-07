@@ -1,0 +1,24 @@
+[Unit]
+Description=GX Telegram VS Code Mirror (OpenAI proxy -> Telegram notifications)
+Documentation=file:///home/ale/projects/gx-telegram/README.md
+After=network-online.target telegram-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ale/projects/gx-telegram
+EnvironmentFile=-/home/ale/projects/gx-telegram/.env
+ExecStart=/home/ale/projects/gx-telegram/.venv/bin/telegram-gateway vscode-proxy
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vscode-telegram-mirror
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=default.target

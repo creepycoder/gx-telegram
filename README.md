@@ -125,7 +125,50 @@ telegram-gateway test                   # REAL end-to-end Telegram test message
 telegram-gateway run                    # run the gateway (foreground)
 telegram-gateway agent --gateway-url http://192.168.1.152:30100 --agent-id scar16
                                         # run the remote-agent runner
+telegram-gateway vscode-proxy [--host H --port P]
+                                        # OpenAI proxy mirroring VS Code <-> Qwen chats to Telegram
 ```
+
+## VS Code ↔ Qwen Telegram mirror
+
+Mirror your **VS Code Copilot Chat** conversations with the local Qwen model to
+Telegram. An OpenAI-compatible passthrough proxy sits between VS Code and
+`llama-server` and pushes each turn (your message + the model reply) to your
+Telegram chat through the gateway admin API.
+
+```
+VS Code ─POST /v1/chat/completions─► proxy :30001 ─► llama-server :30000
+                                       │
+                                       └─ notify ─► gateway API ─► Telegram
+```
+
+```bash
+# 1. start the proxy (systemd user service, enabled at boot)
+systemctl --user enable --now vscode-telegram-mirror.service
+
+# 2. point VS Code at the proxy instead of llama-server, in
+#    ~/.config/Code/User/chatLanguageModels.json:
+#      "url": "http://localhost:30001/v1/chat/completions"
+#    then Reload Window.
+```
+
+Behaviour:
+- **Fail-open**: if the gateway is down, chat keeps working; mirror errors are
+  only logged (`journalctl --user -u vscode-telegram-mirror`).
+- Only turns whose last message is from the user are mirrored, so agent-mode
+  intermediate calls don't spam the chat.
+- Internal helper calls (tiny `max_tokens`, e.g. title generation) and
+  tool-call-only responses are skipped.
+- Both streaming and non-streaming responses are captured; long replies are
+  truncated to 3200 chars.
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `VSCODE_PROXY_UPSTREAM` | `http://localhost:30000` | llama-server (OpenAI) base URL |
+| `VSCODE_PROXY_HOST` | `127.0.0.1` | proxy bind host |
+| `VSCODE_PROXY_PORT` | `30001` | proxy bind port |
+| `VSCODE_PROXY_SKIP_MAX_TOKENS` | `128` | skip requests with `max_tokens ≤` this (0 disables) |
+| `VSCODE_PROXY_NOTIFY_PRIORITY` | `normal` | notification priority |
 
 ## Remote agents (SCAR16)
 

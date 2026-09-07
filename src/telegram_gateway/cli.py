@@ -151,6 +151,15 @@ def cmd_agent(config: Config, args) -> int:
     return 0
 
 
+def cmd_vscode_proxy(config: Config, args) -> int:
+    """Run the OpenAI-compatible proxy mirroring VS Code <-> Qwen chats to Telegram."""
+    from .main import setup_logging
+    from .vscode_proxy import run_proxy
+    setup_logging(config.log_level)
+    asyncio.run(run_proxy(config, host=args.host, port=args.port))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> None:
     load_dotenv()
     parser = argparse.ArgumentParser(prog="telegram-gateway",
@@ -183,6 +192,10 @@ def main(argv: list[str] | None = None) -> None:
     p_agent.add_argument("--gateway-url", required=True,
                          help="Gateway base URL, e.g. http://192.168.1.152:30100")
     p_agent.add_argument("--agent-id", required=True, help="Agent id, e.g. scar16")
+    p_proxy = sub.add_parser("vscode-proxy",
+                             help="OpenAI proxy that mirrors VS Code <-> Qwen chats to Telegram")
+    p_proxy.add_argument("--host", default=None, help="Bind host (default 127.0.0.1)")
+    p_proxy.add_argument("--port", type=int, default=None, help="Bind port (default 30001)")
 
     ns = parser.parse_args(argv)
     if not ns.command:
@@ -192,7 +205,7 @@ def main(argv: list[str] | None = None) -> None:
     handlers = {
         "health": cmd_health, "agents": cmd_agents, "tasks": cmd_tasks,
         "send": cmd_send, "notify": cmd_notify, "test": cmd_test,
-        "run": cmd_run, "agent": cmd_agent,
+        "run": cmd_run, "agent": cmd_agent, "vscode-proxy": cmd_vscode_proxy,
     }
     sys.exit(handlers[ns.command](config, ns))
 
