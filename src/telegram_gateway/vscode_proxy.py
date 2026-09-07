@@ -11,10 +11,13 @@ Telegram through the gateway's admin API:
 Design notes:
 - Fail-open: mirror errors are logged, never surfaced to VS Code. A stopped
   gateway must never break the chat.
-- Only completions whose last message is from the user are mirrored, so
-  agent-mode intermediate requests do not spam Telegram.
+- In agent mode a turn spans many requests; the user message is mirrored once
+  (first request, last message role "user") and the assistant reply is
+  mirrored only when it is a *final* answer — responses that contain tool
+  calls are intermediate steps and stay silent, so Telegram gets one clean
+  message per turn instead of spam.
 - Requests with a tiny ``max_tokens`` (title generation, helper calls) and
-  completions with empty content (tool calls) are skipped.
+  completions with empty content are skipped.
 
 Environment:
 - VSCODE_PROXY_UPSTREAM      default http://localhost:30000
@@ -152,15 +155,33 @@ class VscodeProxy:
     def _response_headers(self, upstream: aiohttp.ClientResponse) -> dict[str, str]:
         return {k: v for k, v in upstream.headers.items() if k.lower() not in HOP_BY_HOP}
 
-    def _should_mirror(self, body: dict[str, Any]) -> bool:
-        messages = body.get("messages") or []
-        if not messages or messages[-1].get("role") != "user":
-            return False
+    def _max_tokens_ok(self, body: dict[str, Any]) -> bool:
         max_tokens = body.get("max_tokens")
-        if self.skip_max_tokens and isinstance(max_tokens, int) \
-                and 0 < max_tokens <= self.skip_max_tokens:
+        return not (self.skip_max_tokens and isinstance(max_tokens, int)
+                    and 0 < max_tokens <= self.skip_max_tokens)
+
+    def _is_user_turn_start(self, body: dict[str, Any]) -> bool:
+        """First request of a turn: the user just sent a message."""
+        messages = body.get("messages") or []
+        return bool(messages) and messages[-1].get("role") == "user" \
+            and self._max_tokens_ok(body)
+
+    def _mirrors_reply(self, body: dict[str, Any]) -> bool:
+        """Mirror the assistant reply for the user's turn *or* an agent turn.
+
+        In agent mode the final answer arrives on a request whose last
+        message is a tool result, not the user's message; the presence of
+        tool history identifies it as the continuation of a mirrored turn.
+        """
+        if not self._max_tokens_ok(body):
             return False  # title generation / other internal helper calls
-        return True
+        if self._is_user_turn_start(body):
+            return True
+        for m in body.get("messages") or []:
+            if m.get("role") == "tool" or (
+                    m.get("role") == "assistant" and m.get("tool_calls")):
+                return True
+        return False
 
     async def _upstream_post(self, request: web.BaseRequest, path: str,
                              raw: bytes) -> aiohttp.ClientResponse:
@@ -179,13 +200,11 @@ class VscodeProxy:
         except ValueError:
             body = None
         assert self.mirror is not None
-        mirror = isinstance(body, dict) and self._should_mirror(body)
-        if mirror:
+        mirror_reply = isinstance(body, dict) and self._mirrors_reply(body)
+        if isinstance(body, dict) and self._is_user_turn_start(body):
             user_text = clean_user_text(content_text(body["messages"][-1].get("content")))
             if user_text:
                 await self.mirror.notify("💬 VS Code — messaggio tuo", user_text)
-            else:
-                mirror = False  # nothing but boilerplate context — stay silent
 
         try:
             up = await self._upstream_post(request, "/v1/chat/completions", raw)
@@ -196,11 +215,14 @@ class VscodeProxy:
         stream = bool(body.get("stream")) if isinstance(body, dict) else False
         if not stream:
             data = await up.read()
-            if mirror and up.status == 200:
+            if mirror_reply and up.status == 200:
                 try:
                     result = json.loads(data)
-                    reply = content_text(result["choices"][0]["message"].get("content"))
-                    await self.mirror.notify("🤖 Qwen (GX10)", reply)
+                    message = result["choices"][0]["message"]
+                    # Responses with tool calls are intermediate agent steps.
+                    if not message.get("tool_calls"):
+                        reply = content_text(message.get("content"))
+                        await self.mirror.notify("🤖 Qwen (GX10)", reply)
                 except (ValueError, KeyError, IndexError):
                     pass
             return web.Response(status=up.status, body=data,
@@ -209,6 +231,7 @@ class VscodeProxy:
         resp = web.StreamResponse(status=up.status, headers=self._response_headers(up))
         await resp.prepare(request)
         reply_parts: list[str] = []
+        saw_tool_call = False
         line_buf = b""
         interrupted = False
         try:
@@ -217,6 +240,8 @@ class VscodeProxy:
                 line_buf += chunk
                 while b"\n" in line_buf:
                     line, line_buf = line_buf.split(b"\n", 1)
+                    if self._sse_tool_call(line):
+                        saw_tool_call = True
                     piece = self._sse_delta(line)
                     if piece:
                         reply_parts.append(piece)
@@ -224,7 +249,7 @@ class VscodeProxy:
             interrupted = True
         finally:
             up.release()
-        if mirror:
+        if mirror_reply and not saw_tool_call:
             reply = "".join(reply_parts).strip()
             if reply:
                 if interrupted:
@@ -233,6 +258,21 @@ class VscodeProxy:
         if not interrupted:
             await resp.write_eof()
         return resp
+
+    @staticmethod
+    def _sse_tool_call(line: bytes) -> bool:
+        line = line.strip()
+        if not line.startswith(b"data:"):
+            return False
+        payload = line[5:].strip()
+        if payload in (b"", b"[DONE]"):
+            return False
+        try:
+            event = json.loads(payload)
+            delta = event["choices"][0].get("delta", {})
+        except (ValueError, KeyError, IndexError):
+            return False
+        return bool(delta.get("tool_calls"))
 
     @staticmethod
     def _sse_delta(line: bytes) -> str:

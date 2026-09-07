@@ -155,10 +155,11 @@ systemctl --user enable --now vscode-telegram-mirror.service
 Behaviour:
 - **Fail-open**: if the gateway is down, chat keeps working; mirror errors are
   only logged (`journalctl --user -u vscode-telegram-mirror`).
-- Only turns whose last message is from the user are mirrored, so agent-mode
-  intermediate calls don't spam the chat.
+- Each turn arrives on Telegram as one user message + one final reply, even
+  in **agent mode**: responses containing tool calls are intermediate steps
+  and stay silent, so the final answer is mirrored once.
 - Internal helper calls (tiny `max_tokens`, e.g. title generation) and
-  tool-call-only responses are skipped.
+  empty-content responses are skipped.
 - Both streaming and non-streaming responses are captured; long replies are
   truncated to 3200 chars.
 
